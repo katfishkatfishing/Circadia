@@ -300,137 +300,149 @@ void TaskSensor(void *pvParameters) {
 }
 
 //lighting engine
-RGBW getSeasonalColor(Season season) {
-  switch (season) {
-    case AUTUMN: return {255, 60, 0, 30};
-    case WINTER: return {20, 60, 180. 160};
-    case SPRING: return{150, 200, 30, 80};
-    case SUMMER: return{255, 160, 10, 220};
-  }
-  return {255, 255, 255, 0}; // default to white
-}
-
 void TaskLighting(void *pvParameters) {
-  TickType_t xLastWakeTime = xTaskGetTickCount();
-
-  float currentBrightness = 0.0f;
-  float phase = 0.0f;
+  TickType_t xLastWakeTie = xTaskGetTickCount();
+  float dynamicLuminance = 0.0f;
+  float noiseCursor = 0.0f;
 
   for (;;) {
-    bool presence;
+    bool awake;
     float lux;
     Season season;
 
-    // read shared telemetry
-    if (xSemaphTake(telemetryMutex, pdMS_TO_TICK(10) == pdTrue)) {
-      presence = telemetry.presenceActive;
-      lux = telemetry.ambientLux;
-      season = telemetry.currentSeason;
-      xSemaphoreGive(telemetryMutex);
+    if (xSemaphoreTake(stateMutex, pdMAS_TO_TICKS(10)) == pdTRUE) {
+      awake = state.presenceActive;
+      lux = state.filteredLux;
+      season = state.currentSeason;
+      xSemaphoreGive(stateMutex);
     }
 
-    //calculate target brightness based on presence using log-gamma scaling
-    float targetBrightness = 0.0f
+    //environmental lux 
+    float targetLuminance = 0.0f;
+    if (awake) {
+      //log mapping
+      float clampedLux = fminf(fmaxf(lux, 0.1f), 2000.0f);
+      float logRatio = log10f(clampedLux + 1.0f) / log10f(2001.0f);
 
-    if (presence) {
-      float clampedLux = fminf(fmaxf(lux, 1.0f), AMBIENT_LUX);
-      float normalizedLux = log10f(clampedLux) / log10f(AMBIENT_LUX);
-      float gammaCorrected = powf(normalizedLux, GAMA_FACTOR);
+      //pass through cie1931 gamma correction
+      uint8_t scaledInput = (uint8_t)(logRatio *255.0f);
+      targetLuminance = (float)calculateCIE(scaledInput);
 
-      //scale to 8bit range and add minimum ember brightness
-      targetBrightness = MIN_EMBER_BRIGHTNESS +(gammaCorrected * (255.0f - MIN_EMBER_BRIGHTNESS));
-
+      if (targetLuminance < 12.0f) targetLuminance = 12.0f;
     } else {
-      //target zero when asleep
-      targetBrightness = 0.0f;
+      //decay to off when in sleep mode
+      targetLuminance = 0.0f;
     }
 
-    //smooth transition
-    currentBrightness += (targetBrightness - currentBrightness) * 0.1f;
+    //temporal smoothing  filter
+    dynamicLuminance += (targetLuminance - dynamicLuminance) * 0.06f;
 
-    RGBW base = getSeasonalColor(season);
-    phase += 0.1f;
+    //procedural synthesis by season
+    noise_cursor += 0.05f;
 
-    //update LED strip with seasonal anim
-    for (int i = 0; i < NUM_LEDS, i++) {
-      float localMod = 1.0f;
+    for (int i = 0; i < NUM_LEDS; i++) {
+      float r = 0, g = 0, b = 0, w = 0;
+      float ledOffset = (float)i * 0.45f;
 
-      if (season == AUTUMN) {
-        //subtle flicker
-        localMod = 0.85f + 0.15f * sinf(phase * 2.1f + (i * 0.8f)) + 0.05f * sinf(phase * 5.7f (i * 1.5f));
-        
-      } else if (season == WINTER) {
-        //slow calm breathing
-        localMod = 0.70f + 0.30F * sinf(phase * 0.5f);
+      switch (season) {
+        case AUTUMN:
+        //fractional brownian motion for ember effect
+        float n = InterpolatedNoise(noiseCursor + ledOffset);
+
+        float emberMod = 0.65f + 0.35f * n; // modulate between 0.3 and 1.0
+
+        //autumn colors
+        r = 255.0f * emberMod;
+        g = 55.0f * (emberMod * emberMod);
+        b = 2.0f;
+        w = 20.0f * emberMod;
+        break;
       }
 
-      float finalScale = (currentBrightness / 255.0f) * localMod;
-      finalScale = fmif(fmaxf(finalScale, 0.0f), 1.0f);
+      case WINTER: {
+        //winter colors 
+        float breath = 0.5f + 0.5f * sinf(noiseCursor * 0.3f + (i * 0.1f));
+        r = 10.0f * breath;
+        g = 40.0f * breath;
+        b = 180.0f * breath;
+        w = 150.0f * (0.8f + 0.2f * breath);
+        break;
+      }
 
-      strip.setPixelColor(i, strip.Color(
-        (uint8_t)(base.r * finalScale),
-        (uint8_t)(base.g * finalScale),
-        (uint8_t)(base.b * finalScale),
-        (uint8_t)(base.w * finalScale)
+      case SPRING: {
+        float shimmer = 0.85f + 0.15f * sinf(noiseCursor * 0.9f + i);
+        r = 140.0f * shimmer;
+        g = 220.0f * shimmer;
+        b = 20.0f * shimmer;
+        w = 60.0f;
+        break;
+      }
 
-      ));
+      case SUMMER: { //nothing special for summer because i hate summer
+        r = 255.0f;
+        g = 180.0f;
+        b = 40.0f;
+        w = 230.0f;
+        break;
+      }
     }
 
-    strip.show();
+    //apply global brightness
+    float masterScalar = dynamicLuminance / 255.0f;
+    uint8_t finalR = (uint8_t)(fminf(fmaxf(r * masterScalar, 0.0f), 255.0f));
+    uint8_t finalG = (uint8_t)(fminf(fmaxf(g * masterScalar, 0.0f), 255.0f));
+    uint8_t finalB = (uint8_t)(fminf(fmaxf(b * masterScalar, 0.0f), 255.0f));
+    uint8_t finalW = (uint8_t)(fminf(fmaxf(w * masterScalar, 0.0f), 255.0f));
 
-    vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICK(33)) // 30Hz update rate
-  }
+    strip.setPixelColor(i, strip.Color(finalR, finalG, finalB, finalW));
+   }
+
+   strip.show();
+
+   vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(33));
 }
 
 //display
 void TaskDisplay(void *pvParameters) {
   TickType_t xLastWakeTime = xTaskGetTickCount();
-  bool lastPresence = false;
+ 
+  //allocate sprite buffer
+  TFT_eSprite sprite = TFT_eSprite(&tft);
+  sprite.setColorDepth(8); //8 bit palette
+  sprite.createSprite(240, 240);
+
+  bool previousWake = false;
 
   for (;;) {
-    float t, h, l;
-    bool presence;
-    Season season;
+    SystemState snap;
 
-    if (xSemaphoreTake(telemetryMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-      t = telemetry.temperature;
-      h = teleetry.humidity;
-      l = telemetry.ambientLux;
-      presence = telemetry.presenceActive;
-      season = telemetry.currentSeason;
-      xSemaphoreGive(telemetryMutex);
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+      snap = state;
+      xSemaphoreGive(stateMutex);
     }
 
-    //manage backlight on presence transition
-    if (presence != lastPresence) {
-      lastPresence = presence;
-
-      //dim display backlight in sleep mode
-      analogWrite(y, presence ? 220 : 15);
+    //manage display backlight
+    if (snap.isAwake != previousWake) {
+      previousWake = sna.isAwake;
+      ledvWrite(PIN_DISPLAY_BACKLIGHT, snap.isAwake ? 190 : 0);
     }
 
-    //render minimalistic grid
-    tft.setTextSize(TFT_DARKGREY, TFT_BLACK);
-    tft.drawString("CIRCADIA", 10, 10, 2);
+    sprite.fillSprite(TFT_BLACK);
 
-    // header indicator
-    tft.drawString(presence ? "[OCCUPIED]" : "[STANDBY]", 160, 10, 2);
+    // header bar
+    sprite.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    sprite.drawString("CIRCADIA", 12, 12, 2);
 
-    //temperature
-    tft.setTextColor(TFT_ORANGE, TFT_BLACK);
-    tft.drawFloat(t, 1, 10, 45, 6);
-    tft.drawString("C", 140, 50, 4);
+    if (snap.isAwake) {
+      sprite.setTextColor(TFT_GREEN, TFT_BLACK);
+      sprite.drawString("ACTIVE", 175, 12, 2);
+    } else {
+      sprite.setTextColor(TFT_MAROON, TFT_BLACK);
+      sprite.drawString("SLEEP", 185, 12, 2);
+    }
 
-    //secondary metrics
-    tft.setTextColor(TFT_ORANGE, TFT_BLACK);
-    tft.drawFloat("Humidity:" + String((int)h) + " %   ", 10, 120, 4);
-    tft.drawString("Light:  " + String((int)l) + " lx  ", 10, 160, 4);
+    sprite.drawFastHLine(10, 32, 220, 0x2104); // draw a horizontal line
 
-    //season indicator footer
-    const char* seasonNames[] = {"Winter", "Spring", "Summer", "Autumn"};
-    tft.setTextColor(TFT_GOLD, TFT_BLACK);
-    tft.drawString(seasonNames[season], 10, 205, 4);
-
-    vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(1000)); // 1Hz update rate
+    
   }
 }
