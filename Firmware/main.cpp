@@ -4,14 +4,14 @@
 #include <Adafruit_ahtx0.h>
 #include <Wire.h>
 #include <Adafruit_NeoPixel.h>
+#include <Preferences.h>
+#include "ephemeris.h"
 
 // pin definitions
-#define
-
+// TODO: Define your hardware pins here (PIN_RADAR_RX, PIN_RADAR_TX, PIN_RADAR_OUT, PIN_DISPLAY_BACKLIGHT, PIN_I2C_SDA, PIN_I2C_SCL)
 
 //constants
 #define PRESENCE_TIMEOUT 600000UL // 1 min timeout to sleep
-#define AMBIENT_LUX 2000.0f //max lux for ambient light
 #define GAMMA_FACTOR 2.2f // gamma correction factor
 #define MIN_EMBER_BRIGHTNESS 6 // minimum brightness for ember effect
 #define NUM_LEDS 30 // number of LEDs in the strip
@@ -27,22 +27,14 @@ enum Season : uint8_t {
   AUTUMN = 3
 };
 
-// define RGBW struct
-struct RGBW {
-  uint8_t r;
-  uint8_t g;
-  uint8_t b;
-  uint8_t w;
-};
-
-enum RadarData {
+struct RadarData {
   bool targetDetected;
   uint8_t targetType;
-  uint16_t targetMoving; //cm
+  uint16_t movingDistance; //cm
   uint8_t movingEnergy;
-  uint16_t targetStationary; //cm
+  uint16_t stationaryDistance; //cm
   uint8_t stationaryEnergy;
-}
+};
 
 //global shared data
 struct SystemState {
@@ -51,9 +43,14 @@ struct SystemState {
   float ambientLux;
   float filteredLux;
   bool presenceActive;
+  bool isAwake;
   RadarData radar;
   Season currentSeason;
   uint8_t masterBrightness;
+  float vpdKpa;
+  const char* comfortLabel;
+  uint16_t statusColor;
+  SolarMetrics solar;
 };
 
 //global variables
@@ -140,10 +137,10 @@ float readBH1750Lux() {
 //setup
 void setup() {
   Serial.begin(115200);
-  RadarSerial.begin(RADAR_BAUD, SERIAL_8N1, PIN_RADAR_RX, PIN_RADAR_TX);
+  radarSerial.begin(RADAR_BAUD, SERIAL_8N1, PIN_RADAR_RX, PIN_RADAR_TX);
 
   stateMutex = xSemaphoreCreateMutex();
-  systemEvents = xEventGroupCreate();
+  stateEventGroup = xEventGroupCreate();
 
   pinMode(PIN_RADAR_OUT, INPUT_PULLDOWN);
   attachInterrupt(digitalPinToInterrupt(PIN_RADAR_OUT), ISR_RadarWake, RISING);
@@ -185,6 +182,7 @@ void setup() {
   state.ambientLux = 100.0f;
   state.filteredLux = 100.0f;
   state.presenceActive = true;
+  state.isAwake = true;
   state.masterBrightness = 255;
 
   //freertos
@@ -222,16 +220,16 @@ void TaskRadar(void *pvParameters) {
       //23 bytes
       if (frameIndex >= 23) {
         //verify end frame
-        if (frameBuffer[19] == 0xF8 && frameBuffer[20] == 0xF7 && framBuffer[21] == 0xF6 && frameBuffer[22] == 0xF5) {
+        if (frameBuffer[19] == 0xF8 && frameBuffer[20] == 0xF7 && frameBuffer[21] == 0xF6 && frameBuffer[22] == 0xF5) {
 
           uint8_t dataType = frameBuffer[8];
           if (dataType == 0x01 || dataType == 0x02) {
             //parse radar data
             RadarData parsedRadar;
             parsedRadar.targetType = frameBuffer[9];
-            parsedRadar.movingDistance = frameBuffer[10] | frameBuffer[11];
+            parsedRadar.movingDistance = (uint16_t)frameBuffer[10] | ((uint16_t)frameBuffer[11] << 8);
             parsedRadar.movingEnergy = frameBuffer[12];
-            parsedRadar.stationaryDistance = frameBuffer[13] | frameBuffer[14];
+            parsedRadar.stationaryDistance = (uint16_t)frameBuffer[13] | ((uint16_t)frameBuffer[14] << 8);
             parsedRadar.stationaryEnergy = frameBuffer[15];
             parsedRadar.targetDetected = parsedRadar.targetType != 0;
             
@@ -243,11 +241,13 @@ void TaskRadar(void *pvParameters) {
               state.radar = parsedRadar;
               //update presence state based on radar data
               state.presenceActive = (millis() - lastValidPresence) < PRESENCE_TIMEOUT;
+              state.isAwake = state.presenceActive;
               xSemaphoreGive(stateMutex);
-          }
-        } 
+            }
+          } 
+        }
+        frameIndex = 0; // Reset for next frame
       }
-      frameIndex = 0; // Reset for next frame
     }
   }
 
@@ -256,6 +256,7 @@ void TaskRadar(void *pvParameters) {
     lastValidPresence = millis();
     if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
       state.presenceActive = true;
+      state.isAwake = true;
       xSemaphoreGive(stateMutex);
     }
   }
@@ -291,7 +292,21 @@ void TaskSensor(void *pvParameters) {
       if (measuredLux >= 0.0f) {
         //apply smoothing to lux readings
         state.filteredLux = (LUX_SMOOTHING_FACTOR * measuredLux) + ((1.0f - LUX_SMOOTHING_FACTOR) * state.filteredLux);
+      }
+      xSemaphoreGive(stateMutex);
     }
+
+    RespiratoryComfort comfort = EnvironmentalMath::computeVPD(tempEvent.temperature, humidityEvent.relative_humidity);
+
+    SolarMetrics solar = EnvironmentalMath::computeSolar(37.7749f, -122.4194f, 283, 16.5f);
+
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+      state.temperature = tempEvent.temperature;
+      state.humidity = humidityEvent.relative_humidity;
+      state.vpdKpa = comfort.vpdKpa;
+      state.comfortLabel = comfort.comfortLabel;
+      state.statusColor = comfort.statusColor;
+      state.solar = solar;
       xSemaphoreGive(stateMutex);
     }
 
@@ -301,7 +316,7 @@ void TaskSensor(void *pvParameters) {
 
 //lighting engine
 void TaskLighting(void *pvParameters) {
-  TickType_t xLastWakeTie = xTaskGetTickCount();
+  TickType_t xLastWakeTime = xTaskGetTickCount();
   float dynamicLuminance = 0.0f;
   float noiseCursor = 0.0f;
 
@@ -309,11 +324,13 @@ void TaskLighting(void *pvParameters) {
     bool awake;
     float lux;
     Season season;
+    float cct = 0.0f;
 
-    if (xSemaphoreTake(stateMutex, pdMAS_TO_TICKS(10)) == pdTRUE) {
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
       awake = state.presenceActive;
       lux = state.filteredLux;
       season = state.currentSeason;
+      cct = state.solar.circadianCctRatio; // 0.0 deep ember, 1.0 full daylight
       xSemaphoreGive(stateMutex);
     }
 
@@ -325,7 +342,7 @@ void TaskLighting(void *pvParameters) {
       float logRatio = log10f(clampedLux + 1.0f) / log10f(2001.0f);
 
       //pass through cie1931 gamma correction
-      uint8_t scaledInput = (uint8_t)(logRatio *255.0f);
+      uint8_t scaledInput = (uint8_t)(logRatio * 255.0f);
       targetLuminance = (float)calculateCIE(scaledInput);
 
       if (targetLuminance < 12.0f) targetLuminance = 12.0f;
@@ -334,72 +351,76 @@ void TaskLighting(void *pvParameters) {
       targetLuminance = 0.0f;
     }
 
-    //temporal smoothing  filter
+    //temporal smoothing filter
     dynamicLuminance += (targetLuminance - dynamicLuminance) * 0.06f;
 
     //procedural synthesis by season
-    noise_cursor += 0.05f;
-
+    noiseCursor += 0.05f;
+    float masterScalar = dynamicLuminance / 255.0f;
+    
     for (int i = 0; i < NUM_LEDS; i++) {
       float r = 0, g = 0, b = 0, w = 0;
       float ledOffset = (float)i * 0.45f;
 
       switch (season) {
-        case AUTUMN:
-        //fractional brownian motion for ember effect
-        float n = InterpolatedNoise(noiseCursor + ledOffset);
+        case AUTUMN: {
+          //fractional brownian motion for ember effect
+          float n = InterpolatedNoise(noiseCursor + ledOffset);
+          float emberMod = 0.65f + 0.35f * n; // modulate between 0.3 and 1.0
 
-        float emberMod = 0.65f + 0.35f * n; // modulate between 0.3 and 1.0
+          //autumn colors
+          r = 255.0f * emberMod;
+          g = 55.0f * (emberMod * emberMod);
+          b = 2.0f;
+          w = 20.0f * emberMod;
+          break;
+        }
 
-        //autumn colors
-        r = 255.0f * emberMod;
-        g = 55.0f * (emberMod * emberMod);
-        b = 2.0f;
-        w = 20.0f * emberMod;
-        break;
+        case WINTER: {
+          //winter colors 
+          float breath = 0.5f + 0.5f * sinf(noiseCursor * 0.3f + (i * 0.1f));
+          r = 10.0f * breath;
+          g = 40.0f * breath;
+          b = 180.0f * breath;
+          w = 150.0f * (0.8f + 0.2f * breath);
+          break;
+        }
+
+        case SPRING: {
+          float shimmer = 0.85f + 0.15f * sinf(noiseCursor * 0.9f + i);
+          r = 140.0f * shimmer;
+          g = 220.0f * shimmer;
+          b = 20.0f * shimmer;
+          w = 60.0f;
+          break;
+        }
+
+        case SUMMER: { //nothing special for summer because i hate summer
+          r = 255.0f;
+          g = 180.0f;
+          b = 40.0f;
+          w = 230.0f;
+          break;
+        }
       }
 
-      case WINTER: {
-        //winter colors 
-        float breath = 0.5f + 0.5f * sinf(noiseCursor * 0.3f + (i * 0.1f));
-        r = 10.0f * breath;
-        g = 40.0f * breath;
-        b = 180.0f * breath;
-        w = 150.0f * (0.8f + 0.2f * breath);
-        break;
-      }
+      //circadian CCT blend
+      float targetR = r * (1.0f - 0.4f * cct);
+      float targetW = w + (255.0f - w) * cct;
 
-      case SPRING: {
-        float shimmer = 0.85f + 0.15f * sinf(noiseCursor * 0.9f + i);
-        r = 140.0f * shimmer;
-        g = 220.0f * shimmer;
-        b = 20.0f * shimmer;
-        w = 60.0f;
-        break;
-      }
+      //apply global brightness
+      uint8_t finalR = (uint8_t)(fminf(fmaxf(targetR * masterScalar, 0.0f), 255.0f));
+      uint8_t finalG = (uint8_t)(fminf(fmaxf(g * masterScalar, 0.0f), 255.0f));
+      uint8_t finalB = (uint8_t)(fminf(fmaxf(b * masterScalar, 0.0f), 255.0f));
+      uint8_t finalW = (uint8_t)(fminf(fmaxf(targetW * masterScalar, 0.0f), 255.0f));
 
-      case SUMMER: { //nothing special for summer because i hate summer
-        r = 255.0f;
-        g = 180.0f;
-        b = 40.0f;
-        w = 230.0f;
-        break;
-      }
+      strip.setPixelColor(i, strip.Color(finalR, finalG, finalB, finalW));
     }
 
-    //apply global brightness
-    float masterScalar = dynamicLuminance / 255.0f;
-    uint8_t finalR = (uint8_t)(fminf(fmaxf(r * masterScalar, 0.0f), 255.0f));
-    uint8_t finalG = (uint8_t)(fminf(fmaxf(g * masterScalar, 0.0f), 255.0f));
-    uint8_t finalB = (uint8_t)(fminf(fmaxf(b * masterScalar, 0.0f), 255.0f));
-    uint8_t finalW = (uint8_t)(fminf(fmaxf(w * masterScalar, 0.0f), 255.0f));
+    strip.show();
 
-    strip.setPixelColor(i, strip.Color(finalR, finalG, finalB, finalW));
-   }
-
-   strip.show();
-
-   vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(33));
+    vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(33));
+  }
 }
 
 //display
@@ -423,8 +444,8 @@ void TaskDisplay(void *pvParameters) {
 
     //manage display backlight
     if (snap.isAwake != previousWake) {
-      previousWake = sna.isAwake;
-      ledvWrite(PIN_DISPLAY_BACKLIGHT, snap.isAwake ? 190 : 0);
+      previousWake = snap.isAwake;
+      ledcWrite(PIN_DISPLAY_BACKLIGHT, snap.isAwake ? 190 : 0);
     }
 
     sprite.fillSprite(TFT_BLACK);
@@ -443,6 +464,44 @@ void TaskDisplay(void *pvParameters) {
 
     sprite.drawFastHLine(10, 32, 220, 0x2104); // draw a horizontal line
 
+    //temp 
+    sprite.setTextColor(TFT_ORANGE, TFT_BLACK);
+    sprite.drawFloat(snap.temperature, 1, 14, 46, 7);
+    sprite.drawString("o", 172, 44, 2);
+    sprite.drawString("C", 186, 52, 4);
     
+    //humidity
+    sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+    sprite.drawString("HUMIDITY", 16, 122, 2);
+    sprite.drawString(String((int)snap.humidity) + "%", 16, 138, 4);
+
+    sprite.drawString("AMBIENT", 130, 122, 2);
+    sprite.drawString(String((int)snap.ambientLux) + "lx", 130, 138, 4);
+
+    sprite.drawFastHLine(10, 172, 220, 0x2104);
+
+    //radar and presence
+    sprite.setTextColor(TFT_SILVER, TFT_BLACK);
+    sprite.drawString("RADAR GATE ENERGIES", 16, 180, 1);
+
+    //static presence bar
+    sprite.drawRect(16, 184, 95, 8, TFT_DARKGREY);
+    uint8_t statW = (uint8_t)((snap.radar.stationaryEnergy / 100.0f) * 91.0f);
+    sprite.fillRect(18, 196, statW, 4, TFT_CYAN);
+
+    //dynamic moving energy bar
+    sprite.drawRect(128, 194, 95, 8, TFT_DARKGREY);
+    uint8_t moveW = (uint8_t)((snap.radar.movingEnergy / 100.0f) * 91.0f);
+    sprite.fillRect(130, 196, moveW, 4, TFT_YELLOW);
+
+    //season
+    const char* seasonTags[] = { "WINTER [FROST]", "SPRING [BLOOM]", "SUMMER [ZENITH]", "AUTUMN [HEARTH]" };
+    sprite.setTextColor(0xFDA0, TFT_BLACK); // amber/gold
+    sprite.drawCenterString(seasonTags[snap.currentSeason], 120, 216, 2);
+
+    //push frame to display
+    sprite.pushSprite(0, 0);
+
+    vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(500));
   }
 }
