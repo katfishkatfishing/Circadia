@@ -6,6 +6,9 @@
 #include <Adafruit_NeoPixel.h>
 #include <Preferences.h>
 #include "ephemeris.h"
+#include <time.h>
+#include <sys/time.h>
+#include <esp_task_wdt.h>
 
 // pin definitions
 #define PIN_I2C_SDA 8
@@ -39,6 +42,11 @@ enum Season : uint8_t {
   SPRING = 1,
   SUMMER = 2,
   AUTUMN = 3
+};
+
+struct CalendarState {
+  int doy;
+  float utcHours;
 };
 
 struct RadarData {
@@ -126,6 +134,18 @@ float InterpolatedNoise(float x) {
   return v1 + f * (v2 - v1);
 }
 
+CalendarState getCurrentTime(float localTimezoneOffset) {
+  time_t now;
+  struct tm timeinfo;
+  time(&now);
+  gmtime_r(&now, &timeinfo); // Convert to UTC
+
+  CalendarState calState;
+  calState.utcHours = timeinfo.tm_hour + (timeinfo.tm_min / 60.0f) + (timeinfo.tm_sec / 3600.0f);
+  calState.doy = timeinfo.tm_yday + 1;
+  return calState;
+}
+
 void IRAM_ATTR ISR_RadarWake() {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
   xEventGroupSetBitsFromISR(stateEventGroup, EVT_RADAR_WAKE, &xHigherPriorityTaskWoken);
@@ -206,12 +226,20 @@ void setup() {
   xTaskCreatePinnedToCore(TaskLighting, "Lighting", 4096, NULL, 3, NULL, 1);
   xTaskCreatePinnedToCore(TaskDisplay, "Display", 4096, NULL, 1, NULL, 1);
 
+  esp_task_wdt_config_t twdt_config = {
+    .timeoutms = 5000,
+    .idle_core_mask = (1 << 0) | (1 << 1),
+    .trigger_panic = true
+  };
+  esp_task_wdt_reconfigure(&twdt_config);
+
   vTaskDelete(NULL); // Delete the setup task as we are using FreeRTOS tasks
 }
 
 void loop() {}// Empty loop since we are using FreeRTOS tasks
 
 void TaskRadar(void *pvParameters) {
+  esp_task_wdt_reset(); // Reset the watchdog timer for this task
 
   TickType_t xLastWakeTime = xTaskGetTickCount();
   uint8_t frameBuffer[64];
@@ -280,7 +308,11 @@ void TaskRadar(void *pvParameters) {
 
 //sensors
 void TaskSensor(void *pvParameters) {
+  esp_task_wdt_reset(); // Reset the watchdog timer for this task
   TickType_t xLastWakeTime = xTaskGetTickCount();
+
+  CalendarState calState = getCurrentTime(8.0f);
+  SolarMetrics solar = EnvironmentalMath::computeSolar(3.0f, 101.4f, calState.doy, calState.utcHours);
 
   for (;;) {
     //read temp and humidity
@@ -331,6 +363,7 @@ void TaskSensor(void *pvParameters) {
 
 //lighting engine
 void TaskLighting(void *pvParameters) {
+  esp_task_wdt_reset(); // Reset the watchdog timer for this task
   TickType_t xLastWakeTime = xTaskGetTickCount();
   float dynamicLuminance = 0.0f;
   float noiseCursor = 0.0f;
@@ -440,6 +473,7 @@ void TaskLighting(void *pvParameters) {
 
 //display
 void TaskDisplay(void *pvParameters) {
+  esp_task_wdt_reset(); // Reset the watchdog timer for this task
   TickType_t xLastWakeTime = xTaskGetTickCount();
  
   //allocate sprite buffer
@@ -542,4 +576,24 @@ void TaskDisplay(void *pvParameters) {
 
     vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(500));
   }
+}
+
+void recoverI2CBus(int sdaPin, int sclPin) {
+  pinMode(sdaPin, INPUT_PULLUP);
+  pinMode(sclPin, OUTPUT);
+
+  for (int i = 0; i < 9; i++) {
+    digitalWrite(sclPin, LOW);
+    delayMicroseconds(5);
+    digitalWrite(sclPin, HIGH);
+    delayMicroseconds(5);
+  }
+
+  pinMode(sdaPin, OUTPUT);
+  digitalWrite(sdaPin, LOW);
+  delayMicroseconds(5);
+  digitalWrite(sclPin, HIGH);
+  delayMicroseconds(5);
+  digitalWrite(sdaPin, HIGH);
+  delayMicroseconds(5);
 }
