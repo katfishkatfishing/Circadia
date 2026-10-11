@@ -10,6 +10,7 @@ This weeks project theme is "Autumn", and so we thought, "Hmm, what hardware thi
 <b>+</b>The light scales off the light from the environment!!</i>
 
 ### Key Features 🗝️
+---
 <ul style="margin-top: -10px; margin-bottom: 0; padding-left: 30px">
     <li style="margin-bottom: 5px">
         <b>Calculates Solar Ephemeris</b>
@@ -56,6 +57,7 @@ This weeks project theme is "Autumn", and so we thought, "Hmm, what hardware thi
 </ul>
 
 ## Photos
+---
 <table>
   <tr>
     <td align="center">
@@ -73,6 +75,26 @@ This weeks project theme is "Autumn", and so we thought, "Hmm, what hardware thi
     <td align="center">
       <img width="400" alt="PCB Render" src="Scrinshot/3D Render.png"><br>
       3D PCB Render
+    </td>
+  </tr>
+</table>
+
+<b><u>Circadia 3D Model</u></b>
+<table>
+  <tr>
+    <td align="center">
+       <img width="400" alt="3D Model" src="Scrinshot/3D Model1.png"><br>
+    </td>
+    <td align="center">
+      <img width="400" alt="3D Model" src="Scrinshot/3D Model2.png"><br>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+       <img width="400" alt="3D Model" src="Scrinshot/3D Model3.png"><br>
+    </td>
+    <td align="center">
+      <img width="400" alt="3D Model" src="Scrinshot/3D Model4.png"><br>
     </td>
   </tr>
 </table>
@@ -99,3 +121,4 @@ This weeks project theme is "Autumn", and so we thought, "Hmm, what hardware thi
 | U4                                    | 1   | HLK-LD2410C                 |                    | Footprint:MODULE_HLK-LD2410C                               | Module Board           | $3.50        | https://www.aliexpress.com/item/1005006213777827.html                                                 |
 | U5                                    | 1   | BH1750FVI-TR                |                    | Footprint:XDCR_BH1750FVI-TR                                | SMD-6 / WSOF6          | $0.50        | https://www.aliexpress.com/w/wholesale-bh1750.html                                                    |
 | U6                                    | 1   | SN74HCT125N                 |                    | Footprint:N14                                              | TSSOP-14 / SOIC-14     | $0.15        | https://www.google.com/search?q=https://www.aliexpress.com/w/wholesale-sn74hct125.html                |
+|||1.54inch LCD Module|||||https://www.waveshare.com/1.54inch-lcd-module.htm|
