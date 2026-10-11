@@ -63,6 +63,8 @@ This weeks project theme is "Autumn", and so we thought, "Hmm, what hardware thi
       Schematic
     </td>
   </tr>
+</table>
+<table>
   <tr>
     <td align="center">
        <img width="400" alt="PCB Trace Routing" src="Scrinshot/PCB Trace Routing.png"><br>
