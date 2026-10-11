@@ -18,7 +18,7 @@ This weeks project theme is "Autumn", and so we thought, "Hmm, what hardware thi
     <li style="margin-bottom: 5px">
         <b>Calculates Solar Ephemeris</b>
         <ul style="padding-left: 45px">
-            <p style="margin-left: -30px; margin-bottom: 5px">Fancy way of saying position on the sun.</p>
+            <p style="margin-left: -30px; margin-bottom: 5px">Fancy way of saying position of the sun.</p>
         </ul>
     </li>
     <li style="margin-bottom: 5px">
