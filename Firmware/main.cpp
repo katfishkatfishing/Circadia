@@ -8,8 +8,22 @@
 #include "ephemeris.h"
 
 // pin definitions
-// TODO: Define your hardware pins here (PIN_RADAR_RX, PIN_RADAR_TX, PIN_RADAR_OUT, PIN_DISPLAY_BACKLIGHT, PIN_I2C_SDA, PIN_I2C_SCL)
+#define PIN_I2C_SDA 8
+#define PIN_I2C_SCL 9
 
+#define PIN_RADAR__RX 44
+#define PIN_RADAR_TX 43
+#define PIN_RADAR_OUT 4
+
+#define PIN_DISPLAY_SCK 12
+#define PIN_DISPLAY_SDA 11
+#define PIN_DISPLAY_MISO 13
+#define PIN_DISPLAY_CS 10
+#define PIN_DISPLAY_DC 14
+#define PIN_DISPLAY_RST 18
+#define PIN_DISPLAY_BACKLIGHT 47
+
+#define PIN_NEOPIXEL 16
 //constants
 #define PRESENCE_TIMEOUT 600000UL // 1 min timeout to sleep
 #define GAMMA_FACTOR 2.2f // gamma correction factor
@@ -64,7 +78,7 @@ static EventGroupHandle_t stateEventGroup = NULL;
 #define EVT_NVS_SAVE_REQ (1 << 2)// Event flag for NVS save request
 
 static Adafruit_AHTX0 aht;
-static Adafruit_NeoPixel strip(30, 5, NEO_GRBW + NEO_KHZ800); // 30 LEDs on pin 5
+static Adafruit_NeoPixel strip(NUM_LEDS, 5, NEO_GRBW + NEO_KHZ800); // 30 LEDs on pin 5
 static TFT_eSPI tft = TFT_eSPI(); // Create TFT object
 static Preferences preferences; // NVS storage
 static HardwareSerial radarSerial(1); // Use hardware serial 1 for radar
@@ -113,7 +127,7 @@ float InterpolatedNoise(float x) {
 }
 
 void IRAM_ATTR ISR_RadarWake() {
-  baseType_t xHigherPriorityTaskWoken = pdFALSE;
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
   xEventGroupSetBitsFromISR(stateEventGroup, EVT_RADAR_WAKE, &xHigherPriorityTaskWoken);
   portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
@@ -249,19 +263,18 @@ void TaskRadar(void *pvParameters) {
         frameIndex = 0; // Reset for next frame
       }
     }
-  }
+  
 
-  EventBits_t bits = xEventGroupWaitBits(stateEventGroup, EVT_RADAR_WAKE, pdTRUE, pdFALSE, 0);
-  if (bits & EVT_RADAR_WAKE) {
-    lastValidPresence = millis();
-    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-      state.presenceActive = true;
-      state.isAwake = true;
-      xSemaphoreGive(stateMutex);
+    EventBits_t bits = xEventGroupWaitBits(stateEventGroup, EVT_RADAR_WAKE, pdTRUE, pdFALSE, 0);
+    if (bits & EVT_RADAR_WAKE) {
+      lastValidPresence = millis();
+      if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+        state.presenceActive = true;
+        state.isAwake = true;
+        xSemaphoreGive(stateMutex);
+      }
     }
-  }
-
-  vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(20)); // 50Hz update rate
+    vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(20)); // 50Hz update rate
   }
 }
 
@@ -284,18 +297,6 @@ void TaskSensor(void *pvParameters) {
     }
     Wire.endTransmission();
 
-    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-      if (ahtSuccess) {
-        state.temperature = tempEvent.temperature;
-        state.humidity = humidityEvent.relative_humidity;
-      }
-      if (measuredLux >= 0.0f) {
-        //apply smoothing to lux readings
-        state.filteredLux = (LUX_SMOOTHING_FACTOR * measuredLux) + ((1.0f - LUX_SMOOTHING_FACTOR) * state.filteredLux);
-      }
-      xSemaphoreGive(stateMutex);
-    }
-
     RespiratoryComfort comfort = EnvironmentalMath::computeVPD(tempEvent.temperature, humidityEvent.relative_humidity);
 
     SolarMetrics solar = EnvironmentalMath::computeSolar(37.7749f, -122.4194f, 283, 16.5f);
@@ -309,6 +310,20 @@ void TaskSensor(void *pvParameters) {
       state.solar = solar;
       xSemaphoreGive(stateMutex);
     }
+
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+      if (ahtSuccess) {
+        state.temperature = tempEvent.temperature;
+        state.humidity = humidityEvent.relative_humidity;
+      }
+      if (measuredLux >= 0.0f) {
+        //apply smoothing to lux readings
+        state.filteredLux = (LUX_SMOOTHING_FACTOR * measuredLux) + ((1.0f - LUX_SMOOTHING_FACTOR) * state.filteredLux);
+      }
+      xSemaphoreGive(stateMutex);
+    }
+
+    
 
     vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(1000)); // 1Hz update rate
   }
@@ -451,53 +466,76 @@ void TaskDisplay(void *pvParameters) {
     sprite.fillSprite(TFT_BLACK);
 
     // header bar
-    sprite.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    sprite.setTextColor(TFT_WHITE, TFT_BLACK);
     sprite.drawString("CIRCADIA", 12, 12, 2);
 
-    if (snap.isAwake) {
-      sprite.setTextColor(TFT_GREEN, TFT_BLACK);
-      sprite.drawString("ACTIVE", 175, 12, 2);
-    } else {
-      sprite.setTextColor(TFT_MAROON, TFT_BLACK);
-      sprite.drawString("SLEEP", 185, 12, 2);
-    }
+    char solBuffer[16];
+    snprintf(solBuffer, sizeof(solBuffer), "SOL: %0.1f`", snap.solar.elevationDegrees);
+    sprite.setTextColor(snap.solar.isDaylight ? TFT_YELLOW : 0x03FF, TFT_BLACK);
+    sprite.drawRightString(solBuffer, 230, 10, 2);
 
     sprite.drawFastHLine(10, 32, 220, 0x2104); // draw a horizontal line
 
     //temp 
     sprite.setTextColor(TFT_ORANGE, TFT_BLACK);
     sprite.drawFloat(snap.temperature, 1, 14, 46, 7);
-    sprite.drawString("o", 172, 44, 2);
-    sprite.drawString("C", 186, 52, 4);
+    sprite.drawString("C", 112, 40, 4);
     
     //humidity
     sprite.setTextColor(TFT_WHITE, TFT_BLACK);
-    sprite.drawString("HUMIDITY", 16, 122, 2);
-    sprite.drawString(String((int)snap.humidity) + "%", 16, 138, 4);
+    sprite.drawString("RH: " + String((int)snap.humidity) + "%", 140, 46, 4);
 
-    sprite.drawString("AMBIENT", 130, 122, 2);
-    sprite.drawString(String((int)snap.ambientLux) + "lx", 130, 138, 4);
-
-    sprite.drawFastHLine(10, 172, 220, 0x2104);
+    sprite.drawFastHLine(8, 88, 224, 0x2104);
 
     //radar and presence
     sprite.setTextColor(TFT_SILVER, TFT_BLACK);
-    sprite.drawString("RADAR GATE ENERGIES", 16, 180, 1);
+    char vpdBuffer[20];
+    snprintf(vpdBuffer, sizeof(vpdBuffer), "VPD: %0.2f kPa", snap.vpdKpa);
+    sprite.drawString(vpdBuffer, 10, 94, 2);
 
-    //static presence bar
-    sprite.drawRect(16, 184, 95, 8, TFT_DARKGREY);
-    uint8_t statW = (uint8_t)((snap.radar.stationaryEnergy / 100.0f) * 91.0f);
-    sprite.fillRect(18, 196, statW, 4, TFT_CYAN);
+    int activeSegments = (int)((snap.vpdKpa / 2.0f) * 10.0f);
+    activeSegments = constrain(activeSegments, 0, 10);
 
-    //dynamic moving energy bar
-    sprite.drawRect(128, 194, 95, 8, TFT_DARKGREY);
-    uint8_t moveW = (uint8_t)((snap.radar.movingEnergy / 100.0f) * 91.0f);
-    sprite.fillRect(130, 196, moveW, 4, TFT_YELLOW);
+    int barStartX = 10;
+    int barY = 114;
+    int segWidth = 8;
+    int segHeight = 12;
+    int segGap = 2;
 
-    //season
-    const char* seasonTags[] = { "WINTER [FROST]", "SPRING [BLOOM]", "SUMMER [ZENITH]", "AUTUMN [HEARTH]" };
-    sprite.setTextColor(0xFDA0, TFT_BLACK); // amber/gold
-    sprite.drawCenterString(seasonTags[snap.currentSeason], 120, 216, 2);
+    for (int i = 0; i < 10; i++) {
+      int xPos = barStartX + i * (segWidth + segGap);
+      if (i < activeSegments) {
+        sprite.fillRect(xPos, barY, segWidth, segHeight, snap.statusColor);
+      } else {
+        sprite.drawRect(xPos, barY, segWidth, segHeight, TFT_DARKGREY);
+      }
+    }
+
+    sprite.setTextColor(snap.statusColor, TFT_BLACK);
+    sprite.drawString(snap.comfortLabel, 115, 114, 2);
+
+    sprite.drawFastHLine(8, 142, 224, 0x2104);
+
+    if (snap.radar.targetDetected) {
+      sprite.setTextColor(TFT_GREEN, TFT_BLACK);
+      char radarStr[36];
+      uint16_t dist = (snap.radar.stationaryDistance > 0) ? snap.radar.stationaryDistance : snap.radar.movingDistance;
+      snprintf(radarStr, sizeof(radarStr), "GATE %d: ACTIVE (%d cm)", dist / 75, dist);
+      sprite.drawString(radarStr, 10, 152, 2);
+    } else {
+      sprite.setTextColor(TFT_MAROON, TFT_BLACK);
+      sprite.drawString("RADAR: IDLE [NO TARGET]", 10, 152, 2);
+    }
+
+    sprite.setTextColor(0xFDA0, TFT_BLACK);
+    sprite.drawString("AUTUMN EPHEMERIS", 10, 188, 2);
+
+    sprite.setTextCOlor(TFT_SILVER, TFT_BLACK);
+    if (snap.solar.isDaylight) {
+      sprite.drawString("PHASE: DAYLIGHT ZENITH", 10, 208, 2);
+    } else {
+      sprite.drawString("PHASE: DUSK / EMBER", 10, 208, 2);
+    }
 
     //push frame to display
     sprite.pushSprite(0, 0);
