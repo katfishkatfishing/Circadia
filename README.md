@@ -124,4 +124,4 @@ This weeks project theme is "Autumn", and so we thought, "Hmm, what hardware thi
 | U4                                    | 1   | HLK-LD2410C                 |                    | Footprint:MODULE_HLK-LD2410C                               | Module Board           | $3.50        | https://www.aliexpress.com/item/1005006213777827.html                                                 |
 | U5                                    | 1   | BH1750FVI-TR                |                    | Footprint:XDCR_BH1750FVI-TR                                | SMD-6 / WSOF6          | $0.50        | https://www.aliexpress.com/w/wholesale-bh1750.html                                                    |
 | U6                                    | 1   | SN74HCT125N                 |                    | Footprint:N14                                              | TSSOP-14 / SOIC-14     | $0.15        | https://www.google.com/search?q=https://www.aliexpress.com/w/wholesale-sn74hct125.html                |
-|||1.54inch LCD Module|||||https://www.waveshare.com/1.54inch-lcd-module.htm|
+|-|1|1.54inch LCD Module|✅|-|-|$9.49|https://www.waveshare.com/1.54inch-lcd-module.htm|
