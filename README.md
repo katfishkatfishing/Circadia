@@ -55,6 +55,26 @@ This weeks project theme is "Autumn", and so we thought, "Hmm, what hardware thi
     </li>
 </ul>
 
+## Photos
+<table>
+  <tr>
+    <td align="center">
+      <img width="800" alt="Schematic" src="Scrinshot/Schematic.png"><br>
+      Schematic
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+       <img width="400" alt="PCB Trace Routing" src="Scrinshot/PCB Trace Routing.png"><br>
+      PCB Trace Routing
+    </td>
+    <td align="center">
+      <img width="400" alt="PCB Render" src="Scrinshot/3D Render.png"><br>
+      3D PCB Render
+    </td>
+  </tr>
+</table>
+
 ## BOM
 | Reference                             | Qty | Value                       | Exclude from Board | Footprint                                                  | Package                | Price        | Check_prices                                                                                          |
 | ------------------------------------- | --- | --------------------------- | ------------------ | ---------------------------------------------------------- | ---------------------- | ------------ | ----------------------------------------------------------------------------------------------------- |
