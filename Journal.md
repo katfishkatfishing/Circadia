@@ -1,4 +1,20 @@
-uh I forgot the date hold on
+## Phantom log
+
+# Lapse 1 
+First try on making a pumpkin, turned out ok but it wasnt air-tight and i couldnt get the wall to have thickness.
+<img width="959" height="487" alt="image" src="https://github.com/user-attachments/assets/3bb4a9f0-41ca-4ac9-af7d-9d57c96927d1" />
+
+# Lapse 2
+tldr I couldnt figure how to make the wall have thickness so i exported the pumpkin to blender where i knew how to make the wall have thickness.
+<img width="959" height="488" alt="image" src="https://github.com/user-attachments/assets/325a7903-0d73-4815-af66-89396d269ce4" />
+
+# Lapse 3
+Finished the pumpkin model with base for the PCB and top slot for a screen.
+<img width="959" height="489" alt="image" src="https://github.com/user-attachments/assets/52530603-fdfc-472c-a796-ae6e91a564ba" />
+
+
+
+
 
 
 ## Katfish log
@@ -19,3 +35,5 @@ Fixed some connection issues and redid PCB
 # Lapse 4 (19 minutes)
 Fixing usb c data lines legnth
 <img width="1151" height="648" alt="image" src="https://github.com/user-attachments/assets/5a3224c5-47e4-40cc-bd8d-9e5856fef7b0" />
+
+
